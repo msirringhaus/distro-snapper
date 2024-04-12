@@ -1,0 +1,124 @@
+#!/bin/bash
+set -e
+
+VERSION="0.1.0"
+
+function make_snapshot() {
+  containername="$1"
+  snapshotname="$2"
+  # First make a snapshot of the current state
+  # Save it as a new image with the current date appended, so we don't overwrite another image
+  podman container commit -p "$containername" "$snapshotname-$(date -u +%Y-%m-%dt%H-%M-%S)"
+}
+
+function prune_snapshots() {
+  containername="$1"
+  snapshotname="$2"
+  num_of_snapshots="$3"
+
+  # Get current image
+  current_image=$(current_container_image "$containername")
+
+  # Prune the snapshots
+  # 1. podman sorts images according to creation date. 
+  # 2. Filter out the currently used image.
+  # 3. tail-syntax needs us to add one to the number of lines we want to skip
+  # 4. and xargs will remove all remaining images
+  tail_num=$((num_of_snapshots+1))
+  podman images --no-trunc --format "{{.Id}}" --filter "reference=$snapshotname-*" | grep -v "$current_image" | tail -n +$tail_num | xargs -r podman rmi
+}
+
+function upgrade_container() {
+  containername="$1"
+  snapshotname="$2"
+  num_of_snapshots="$3"
+
+  make_snapshot "$containername" "$snapshotname"
+
+  # Then run the updates on it
+  distrobox upgrade "$containername"
+
+  prune_snapshots "$containername" "$snapshotname" "$num_of_snapshots"
+}
+
+function list_snapshots() {
+  snapshotname="$1"
+  podman images --no-trunc --format "{{.Repository}}" --filter "reference=$snapshotname-*" 
+}
+
+function current_container_image() {
+  containername="$1"
+  podman container ls -a --no-trunc --format "{{.ImageID}}" --filter "name=$containername"
+}
+
+function rollback_to_image() {
+  containername="$1"
+  rollback_image="$2"
+
+  # Get current image
+  current_image=$(current_container_image "$containername")
+
+  podman container stop "$containername"
+  podman container rm "$containername"
+
+  distrobox create -i "$rollback_image" -n "$containername"
+
+  # Remove no longer used current image
+  podman rmi "$current_image"
+}
+
+function run_list() {
+  if [ $# -le 1 ]; then
+    print_list_usage_and_exit
+  fi
+  
+  snapshotname="$2"
+  list_snapshots "$snapshotname" 
+}
+
+function main() {
+  # Exit script on CTRL+C
+  trap "exit" INT
+
+  if [ $# -le 0 ]; then
+    print_main_usage_and_exit
+  fi
+  
+  case "$1" in
+      list|ls)
+        run_list "$@"
+        shift
+        ;;
+      create)
+        run_create "$@"
+        shift
+        ;;
+      *)
+        print_main_usage_and_exit
+        ;;
+    esac
+}
+
+function print_list_usage_and_exit() {
+  echo "Usage: distro-snapper list SNAPSHOTNAME"
+  echo ""
+  echo "Options:"
+  echo "    SNAPSHOTNAME: Which snapshots should be listed"
+  exit 1
+}
+
+function print_main_usage_and_exit() {
+  echo "distro-snapper version: $VERSION"
+  echo ""
+  echo "Choose one of the following commands:"
+  echo "    list | ls"
+  echo "    create"
+  echo "    rm"
+  echo "    prune"
+  echo "    rollback"
+  echo "    update"
+  echo "    help"
+  exit 1
+}
+
+main "$@"
