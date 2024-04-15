@@ -5,16 +5,16 @@ VERSION="0.1.0"
 
 function make_snapshot() {
   containername="$1"
-  snapshotname="$2"
+  snapshotid=$(calc_snapshot_id "$containername")
   # First make a snapshot of the current state
   # Save it as a new image with the current date appended, so we don't overwrite another image
-  podman container commit -p "$containername" "$snapshotname-$(date -u +%Y-%m-%dt%H-%M-%S)"
+  podman container commit -p "$containername" "$snapshotid-$(date -u +%Y-%m-%dt%H-%M-%S)"
 }
 
 function prune_snapshots() {
   containername="$1"
-  snapshotname="$2"
-  num_of_snapshots="$3"
+  snapshotid=$(calc_snapshot_id "$containername")
+  num_of_snapshots="$2"
 
   # Get current image
   current_image=$(current_container_image "$containername")
@@ -25,30 +25,38 @@ function prune_snapshots() {
   # 3. tail-syntax needs us to add one to the number of lines we want to skip
   # 4. and xargs will remove all remaining images
   tail_num=$((num_of_snapshots+1))
-  podman images --no-trunc --format "{{.Id}}" --filter "reference=$snapshotname-*" | grep -v "$current_image" | tail -n +$tail_num | xargs -r podman rmi
+  podman images --no-trunc --format "{{.Id}}" --filter "reference=$snapshotid-*" | grep -v "$current_image" | tail -n +$tail_num | xargs -r podman rmi
 }
 
 function update_container() {
   containername="$1"
-  snapshotname="$2"
-  num_of_snapshots="$3"
+  num_of_snapshots="$2"
 
-  make_snapshot "$containername" "$snapshotname"
+  make_snapshot "$containername"
 
   # Then run the updates on it
   distrobox upgrade "$containername"
 
-  prune_snapshots "$containername" "$snapshotname" "$num_of_snapshots"
+  prune_snapshots "$containername" "$num_of_snapshots"
 }
 
 function list_snapshots() {
-  snapshotname="$1"
-  podman images --no-trunc --format "{{.Repository}}" --filter "reference=$snapshotname-*" 
+  containername="$1"
+  snapshotid=$(calc_snapshot_id "$containername")
+  podman images --no-trunc --format "{{.Repository}}" --filter "reference=$snapshotid-*"
 }
 
 function current_container_image() {
   containername="$1"
   podman container ls -a --no-trunc --format "{{.ImageID}}" --filter "name=$containername"
+}
+
+function calc_snapshot_id() {
+  containername="$1"
+  # We can't use the containername directly, because it can contain
+  # many characters that image-names are not allowed to use.
+  # So we simply hash the containername and use that.
+  echo "$containername" | sha1sum | cut -f1 -d " "
 }
 
 function rollback_to_image() {
@@ -81,18 +89,17 @@ function run_list() {
     print_list_usage_and_exit
   fi
   
-  snapshotname="$2"
-  list_snapshots "$snapshotname" 
+  containername="$2"
+  list_snapshots "$containername"
 }
 
 function run_create() {
-  if [ $# -ne 3 ]; then
+  if [ $# -ne 2 ]; then
     print_create_usage_and_exit
   fi
   
   containername="$2"
-  snapshotname="$3"
-  make_snapshot "$containername" "$snapshotname" 
+  make_snapshot "$containername"
 }
 
 function run_remove() {
@@ -100,19 +107,18 @@ function run_remove() {
     print_remove_usage_and_exit
   fi
   
-  snapshotname="$2"
-  podman rmi "$snapshotname" 
+  containerid="$2"
+  podman rmi "$containerid"
 }
 
 function run_prune() {
-  if [ $# -ne 4 ]; then
+  if [ $# -ne 3 ]; then
     print_prune_usage_and_exit
   fi
   
   containername="$2"
-  snapshotname="$3"
-  num_of_snapshots="$4"
-  prune_snapshots "$containername" "$snapshotname" "$num_of_snapshots"
+  num_of_snapshots="$3"
+  prune_snapshots "$containername" "$num_of_snapshots"
 }
 
 function run_rollback() {
@@ -126,14 +132,13 @@ function run_rollback() {
 }
 
 function run_update() {
-  if [ $# -ne 4 ]; then
+  if [ $# -ne 3 ]; then
     print_update_usage_and_exit
   fi
   
   containername="$2"
-  snapshotname="$3"
-  num_of_snapshots="$4"
-  update_container "$containername" "$snapshotname" "$num_of_snapshots"
+  num_of_snapshots="$3"
+  update_container "$containername" "$num_of_snapshots"
 }
 
 function main() {
@@ -188,36 +193,34 @@ function print_current_usage_and_exit() {
 }
 
 function print_list_usage_and_exit() {
-  echo "Usage: distro-snapper list SNAPSHOT_PREFIX"
+  echo "Usage: distro-snapper list DISTROBOX_NAME"
   echo ""
   echo "Options:"
-  echo "    SNAPSHOT_PREFIX: Which snapshots should be listed"
+  echo "    DISTROBOX_NAME: Snapshots of which distrobox should be listed"
   exit 1
 }
 
 function print_remove_usage_and_exit() {
-  echo "Usage: distro-snapper remove SNAPSHOT_PREFIX"
+  echo "Usage: distro-snapper remove SNAPSHOT"
   echo ""
   echo "Options:"
-  echo "    SNAPSHOT_PREFIX: Which snapshots should be removed"
+  echo "    SNAPSHOT: Which snapshot should be removed"
   exit 1
 }
 
 function print_create_usage_and_exit() {
-  echo "Usage: distro-snapper create DISTROBOX_NAME SNAPSHOT_PREFIX"
+  echo "Usage: distro-snapper create DISTROBOX_NAME"
   echo ""
   echo "Options:"
   echo "    DISTROBOX_NAME: Which container to snapshot"
-  echo "    SNAPSHOT_PREFIX: How the snapshot-prefix should be named (snapshot-date will be appended)"
   exit 1
 }
 
 function print_prune_usage_and_exit() {
-  echo "Usage: distro-snapper prune DISTROBOX_NAME SNAPSHOT_PREFIX NUM_OF_SNAPSHOTS"
+  echo "Usage: distro-snapper prune DISTROBOX_NAME NUM_OF_SNAPSHOTS"
   echo ""
   echo "Options:"
   echo "    DISTROBOX_NAME: Which container is affected"
-  echo "    SNAPSHOT_PREFIX: Which associated snapshot-prefix"
   echo "    NUM_OF_SNAPSHOTS: How many snapshots should remain"
   exit 1
 }
@@ -232,12 +235,11 @@ function print_rollback_usage_and_exit() {
 }
 
 function print_update_usage_and_exit() {
-  echo "Usage: distro-snapper update DISTROBOX_NAME SNAPSHOT_PREFIX NUM_OF_SNAPSHOTS"
+  echo "Usage: distro-snapper update DISTROBOX_NAME NUM_OF_SNAPSHOTS"
   echo ""
   echo "Convenience function, which creates a snapshot, runs \`distrobox update\` and then prunes the remaining snapshots"
   echo "Options:"
   echo "    DISTROBOX_NAME: Which container to update"
-  echo "    SNAPSHOT_PREFIX: Which associated snapshot-prefix"
   echo "    NUM_OF_SNAPSHOTS: How many snapshots should remain"
   exit 1
 }
