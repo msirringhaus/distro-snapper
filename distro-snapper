@@ -46,6 +46,18 @@ function list_snapshots() {
   podman images --no-trunc --format "{{.Repository}}" --filter "reference=$snapshotid-*"
 }
 
+function export_snapshot() {
+  containername="$1"
+  snapshot_image="$2"
+  target_dir="$3"
+
+  # Replacing the snapshot-ID with the actual container name
+  snapshotid=$(calc_snapshot_id "$containername")
+  tarballname=$(echo "$snapshot_image" | sed "s|localhost/$snapshotid|$containername|")
+  mkdir -p "$target_dir"
+  podman save "$snapshot_image" | bzip2 > "$target_dir/$tarballname.tar.bz"
+}
+
 function current_container_image() {
   containername="$1"
   podman container ls -a --no-trunc --format "{{.ImageID}}" --filter "name=$containername"
@@ -141,6 +153,26 @@ function run_update() {
   update_container "$containername" "$num_of_snapshots"
 }
 
+function run_export() {
+  if [ $# -ne 4 ]; then
+    print_export_usage_and_exit
+  fi
+
+  containername="$2"
+  snapshot_image="$3"
+  target_dir="$4"
+  export_snapshot "$containername" "$snapshot_image" "$target_dir"
+}
+
+function run_import() {
+  if [ $# -ne 2 ]; then
+    print_import_usage_and_exit
+  fi
+
+  tarball="$2"
+  podman load < "$tarball"
+}
+
 function main() {
   # Exit script on CTRL+C
   trap "exit" INT
@@ -176,6 +208,14 @@ function main() {
         ;;
       update)
         run_update "$@"
+        shift
+        ;;
+      export)
+        run_export "$@"
+        shift
+        ;;
+      import)
+        run_import "$@"
         shift
         ;;
       *)
@@ -244,6 +284,24 @@ function print_update_usage_and_exit() {
   exit 1
 }
 
+function print_export_usage_and_exit() {
+  echo "Usage: distro-snapper export DISTROBOX_NAME TARGET_SNAPSHOT TARGET_DIR"
+  echo ""
+  echo "Options:"
+  echo "    DISTROBOX_NAME: Which container is affected"
+  echo "    TARGET_SNAPSHOT: Which snapshot to export"
+  echo "    TARGET_DIR: Where to export the snapshot to"
+  exit 1
+}
+
+function print_import_usage_and_exit() {
+  echo "Usage: distro-snapper import TARBALL"
+  echo ""
+  echo "Options:"
+  echo "    TARBALL: Path to tarball of an exported snapshot that should be imported"
+  exit 1
+}
+
 function print_main_usage_and_exit() {
   echo "distro-snapper version: $VERSION"
   echo ""
@@ -255,6 +313,8 @@ function print_main_usage_and_exit() {
   echo "    prune"
   echo "    rollback"
   echo "    update"
+  echo "    export"
+  echo "    import"
   echo "    help"
   exit 1
 }
