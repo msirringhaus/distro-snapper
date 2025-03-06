@@ -84,7 +84,7 @@ function rollback_to_image() {
   distrobox create -i "$rollback_image" -n "$containername"
 
   # Remove no longer used current image
-  podman rmi "$current_image"
+  # podman rmi "$current_image"
 }
 
 function run_current() {
